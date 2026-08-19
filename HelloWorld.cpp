@@ -31,6 +31,8 @@ constexpr int kAddButtonId = 1105;
 constexpr int kEqualsButtonId = 1106;
 constexpr int kDecimalButtonId = 1107;
 constexpr int kDigitButtonIdBase = 1200;
+constexpr int kButtonColoursCommandId = 1300;
+constexpr int kBackgroundColoursCommandId = 1301;
 constexpr wchar_t kBackspaceSymbol[] = L"\u232B";
 constexpr int kOuterMargin = 10;
 constexpr int kControlGap = 6;
@@ -868,6 +870,60 @@ void HandleCalculatorCommand(HWND window, int controlId)
     UpdateDisplay(*state);
 }
 
+HMENU CreateSettingsMenuBar()
+{
+    const HMENU settingsMenu = CreatePopupMenu();
+    if (settingsMenu == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (AppendMenuW(settingsMenu, MF_STRING, kButtonColoursCommandId, L"&Button Colours") == FALSE
+        || AppendMenuW(settingsMenu, MF_STRING, kBackgroundColoursCommandId, L"Back&ground Colours") == FALSE)
+    {
+        DestroyMenu(settingsMenu);
+        return nullptr;
+    }
+
+    const HMENU menuBar = CreateMenu();
+    if (menuBar == nullptr)
+    {
+        DestroyMenu(settingsMenu);
+        return nullptr;
+    }
+
+    if (AppendMenuW(
+            menuBar,
+            MF_POPUP,
+            reinterpret_cast<UINT_PTR>(settingsMenu),
+            L"&Settings")
+        == FALSE)
+    {
+        DestroyMenu(settingsMenu);
+        DestroyMenu(menuBar);
+        return nullptr;
+    }
+
+    return menuBar;
+}
+
+void HandleSettingsCommand(int commandId)
+{
+    switch (commandId)
+    {
+    case kButtonColoursCommandId:
+        // TODO: wire up the button colours command once its behavior is specified.
+        break;
+
+    case kBackgroundColoursCommandId:
+        // TODO: wire up the background colours command once its behavior is specified.
+        break;
+
+    default:
+        break;
+    }
+}
+
 struct WindowIcons
 {
     HICON largeIcon = nullptr;
@@ -1033,6 +1089,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             HandleCalculatorCommand(window, LOWORD(wParam));
         }
+        else if (HIWORD(wParam) == 0)
+        {
+            HandleSettingsCommand(LOWORD(wParam));
+        }
         return 0;
 
     case WM_DRAWITEM:
@@ -1060,7 +1120,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             if (AdjustWindowRectEx(
                     &minimumWindowBounds,
                     WS_OVERLAPPEDWINDOW,
-                    FALSE,
+                    TRUE,
                     0)
                 != FALSE)
             {
@@ -1147,6 +1207,14 @@ int WINAPI wWinMain(
     const bool hasSavedPlacement = LoadWindowPlacement(savedPlacement);
     CalculatorState calculatorState{};
 
+    const HMENU menuBar = CreateSettingsMenuBar();
+    if (menuBar == nullptr)
+    {
+        UnregisterClassW(kWindowClassName, instance);
+        DestroyWindowIcons(icons);
+        return 1;
+    }
+
     const HWND window = CreateWindowExW(
         0,
         kWindowClassName,
@@ -1157,12 +1225,13 @@ int WINAPI wWinMain(
         defaultWindowWidth,
         defaultWindowHeight,
         nullptr,
-        nullptr,
+        menuBar,
         instance,
         &calculatorState);
 
     if (window == nullptr)
     {
+        DestroyMenu(menuBar);
         UnregisterClassW(kWindowClassName, instance);
         DestroyWindowIcons(icons);
         return 1;

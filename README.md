@@ -8,6 +8,7 @@ This repository also serves as a compact example of a local, AI-assisted coding 
 
 - Native Win32 GUI with no console window.
 - Read-only output display above a familiar, resizable calculator button grid.
+- A Settings menu in the window's menu bar with Button Colours and Background Colours commands (placeholders until their behaviour is wired up).
 - Bold Segoe UI display and button text that automatically scales as the window is resized.
 - Display text that shrinks as needed to keep long values visible.
 - A centered, theme-aware owner-drawn backspace graphic.
@@ -60,7 +61,7 @@ The coding agent works directly against the local repository rather than generat
 
 | Path | Purpose |
 | --- | --- |
-| `HelloWorld.cpp` | Win32 entry point, calculator state and operations, responsive controls, window procedure, and Registry-backed window placement persistence |
+| `HelloWorld.cpp` | Win32 entry point, Settings menu bar, calculator state and operations, responsive controls, window procedure, and Registry-backed window placement persistence |
 | `HelloWorld.vcxproj` | Visual C++ Debug and Release x64 build settings |
 | `HelloWorld.sln` | Visual Studio solution |
 | `CLAUDE.md` | Local project memory, verification procedure, and coding conventions |
@@ -139,6 +140,7 @@ There is no unit-test framework because the program is a very small native GUI a
 2. Build `Release|x64` successfully.
 3. Launch the real executable and verify:
    - the main window title is `Calculator`;
+   - the menu bar contains a `Settings` entry whose drop-down lists `Button Colours` and `Background Colours`;
    - the read-only display starts at `0` above the calculator button grid;
    - digits, decimals, clear, backspace, all four arithmetic operations, and equals work;
    - division by zero displays `Error`, and entering a digit starts a new calculation.
