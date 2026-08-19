@@ -7,6 +7,7 @@ This repository also serves as a compact example of a local, AI-assisted coding 
 ## Features
 
 - Native Win32 GUI with no console window.
+- The same Windows mouse icon as the local desktop shortcut in the title bar and window UI.
 - Unicode Windows API calls throughout.
 - Centered greeting that follows the client area as the window is resized.
 - Persistent window position, size, and maximized state.

@@ -1,4 +1,7 @@
 #include <windows.h>
+#include <shellapi.h>
+
+#pragma comment(lib, "Shell32.lib")
 
 namespace
 {
@@ -7,7 +10,61 @@ constexpr wchar_t kWindowTitle[] = L"Hello World";
 constexpr wchar_t kGreeting[] = L"Hello World!";
 constexpr wchar_t kSettingsRegistryPath[] = L"Software\\UsesMyAgent\\HelloWorld";
 constexpr wchar_t kWindowPlacementValueName[] = L"WindowPlacement";
+constexpr wchar_t kShortcutIconPath[] = L"%SystemRoot%\\System32\\main.cpl";
+constexpr int kShortcutIconIndex = 0;
 constexpr int kGreetingControlId = 1001;
+
+struct WindowIcons
+{
+    HICON largeIcon = nullptr;
+    HICON smallIcon = nullptr;
+};
+
+WindowIcons LoadShortcutIcons()
+{
+    wchar_t expandedIconPath[MAX_PATH]{};
+    if (ExpandEnvironmentStringsW(
+            kShortcutIconPath,
+            expandedIconPath,
+            static_cast<DWORD>(MAX_PATH))
+        == 0)
+    {
+        return {};
+    }
+
+    WindowIcons icons{};
+    ExtractIconExW(
+        expandedIconPath,
+        kShortcutIconIndex,
+        &icons.largeIcon,
+        nullptr,
+        1);
+
+    if (icons.largeIcon != nullptr)
+    {
+        icons.smallIcon = reinterpret_cast<HICON>(CopyImage(
+            icons.largeIcon,
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            0));
+    }
+
+    return icons;
+}
+
+void DestroyWindowIcons(const WindowIcons& icons)
+{
+    if (icons.largeIcon != nullptr)
+    {
+        DestroyIcon(icons.largeIcon);
+    }
+
+    if (icons.smallIcon != nullptr && icons.smallIcon != icons.largeIcon)
+    {
+        DestroyIcon(icons.smallIcon);
+    }
+}
 
 bool IsWindowPlacementUsable(const WINDOWPLACEMENT& placement)
 {
@@ -164,17 +221,22 @@ int WINAPI wWinMain(
     PWSTR,
     int showCommand)
 {
+    const WindowIcons icons = LoadShortcutIcons();
+
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
     windowClass.style = CS_HREDRAW | CS_VREDRAW;
     windowClass.lpfnWndProc = WindowProcedure;
     windowClass.hInstance = instance;
+    windowClass.hIcon = icons.largeIcon;
     windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     windowClass.lpszClassName = kWindowClassName;
+    windowClass.hIconSm = icons.smallIcon != nullptr ? icons.smallIcon : icons.largeIcon;
 
     if (RegisterClassExW(&windowClass) == 0)
     {
+        DestroyWindowIcons(icons);
         return 1;
     }
 
@@ -202,8 +264,22 @@ int WINAPI wWinMain(
 
     if (window == nullptr)
     {
+        UnregisterClassW(kWindowClassName, instance);
+        DestroyWindowIcons(icons);
         return 1;
     }
+
+    SendMessageW(
+        window,
+        WM_SETICON,
+        ICON_BIG,
+        reinterpret_cast<LPARAM>(icons.largeIcon));
+    SendMessageW(
+        window,
+        WM_SETICON,
+        ICON_SMALL,
+        reinterpret_cast<LPARAM>(
+            icons.smallIcon != nullptr ? icons.smallIcon : icons.largeIcon));
 
     if (hasSavedPlacement)
     {
@@ -222,5 +298,7 @@ int WINAPI wWinMain(
         DispatchMessageW(&message);
     }
 
+    UnregisterClassW(kWindowClassName, instance);
+    DestroyWindowIcons(icons);
     return static_cast<int>(message.wParam);
 }
