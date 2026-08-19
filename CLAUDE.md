@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository contains a minimal native C++ Win32 desktop application. It opens a standard resizable Windows GUI window, displays `Hello World!` centered in the client area, and persists the window's position, size, and maximized state in `HKEY_CURRENT_USER\Software\UsesMyAgent\HelloWorld`.
+This repository contains a minimal native C++ Win32 desktop calculator. It provides a read-only display above a resizable button grid for decimal input, clear, backspace, addition, subtraction, multiplication, division, and equals, and persists the window's position, size, and maximized state in `HKEY_CURRENT_USER\Software\UsesMyAgent\HelloWorld`.
 
 ## Environment and setup
 
@@ -41,8 +41,8 @@ Build outputs:
 After a meaningful source or project-file change:
 
 1. Build both `Debug|x64` and `Release|x64`.
-2. Launch the executable and verify that the main window title is `Hello World`.
-3. Verify that the child static control displays `Hello World!`.
+2. Launch the executable and verify that the main window title is `Calculator`.
+3. Verify that the read-only display starts at `0`, the calculator button grid is visible, and basic arithmetic works.
 4. Close the application after GUI verification.
 5. Run `git diff --check` before reporting completion.
 
@@ -50,7 +50,7 @@ There is no unit-test framework in this minimal project. A successful warning-cl
 
 ## Project structure
 
-- `HelloWorld.cpp` — Win32 entry point, window procedure, and centered greeting control.
+- `HelloWorld.cpp` — Win32 entry point, calculator state and operations, controls, responsive layout, and window procedure.
 - `HelloWorld.vcxproj` — Debug and Release x64 build configuration.
 - `HelloWorld.sln` — Visual Studio solution.
 - `README.md` — user-facing build instructions.

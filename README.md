@@ -1,15 +1,17 @@
-# UsesMyAgent — Hello World Windows GUI
+# UsesMyAgent — Native Windows Calculator
 
-A small, dependency-free native C++ desktop application for Windows. It opens one resizable window, displays **Hello World!** in the center, and restores the window's last position, size, and maximized state when it is started again.
+A small, dependency-free native C++ desktop calculator for Windows. It provides a read-only output display above a familiar button grid and restores the window's last position, size, and maximized state when it is started again.
 
 This repository also serves as a compact example of a local, AI-assisted coding workflow: the source, Visual Studio project, builds, GUI smoke tests, Git operations, and project-specific instructions are all managed directly in a Windows checkout.
 
 ## Features
 
 - Native Win32 GUI with no console window.
+- Read-only output display above a familiar, resizable calculator button grid.
+- Decimal input, clear, backspace, addition, subtraction, multiplication, division, and equals.
+- Immediate left-to-right chained calculations and clean recovery after division by zero.
 - The same Windows mouse icon as the local desktop shortcut in the title bar and window UI.
 - Unicode Windows API calls throughout.
-- Centered greeting that follows the client area as the window is resized.
 - Persistent window position, size, and maximized state.
 - Validation that a saved window still intersects an available monitor before restoring it.
 - Separate Debug and Release x64 configurations.
@@ -55,7 +57,7 @@ The coding agent works directly against the local repository rather than generat
 
 | Path | Purpose |
 | --- | --- |
-| `HelloWorld.cpp` | Win32 entry point, window procedure, greeting control, and Registry-backed window placement persistence |
+| `HelloWorld.cpp` | Win32 entry point, calculator state and operations, responsive controls, window procedure, and Registry-backed window placement persistence |
 | `HelloWorld.vcxproj` | Visual C++ Debug and Release x64 build settings |
 | `HelloWorld.sln` | Visual Studio solution |
 | `CLAUDE.md` | Local project memory, verification procedure, and coding conventions |
@@ -118,7 +120,7 @@ HKEY_CURRENT_USER\Software\UsesMyAgent\HelloWorld
 
 The value is named `WindowPlacement`. On the next launch, the application restores the saved normal window rectangle and whether the window was maximized. Minimized state is deliberately not restored, so the application never starts hidden on the taskbar.
 
-Saved placement is ignored if it is malformed or does not intersect a currently available monitor. In that case, the application opens with its default `640 × 360` size, centered using the primary screen dimensions.
+Saved placement is ignored if it is malformed or does not intersect a currently available monitor. In that case, the application opens with its default `360 × 500` size, centered using the primary screen dimensions.
 
 To reset the saved placement from PowerShell:
 
@@ -133,8 +135,10 @@ There is no unit-test framework because the program is a very small native GUI a
 1. Build `Debug|x64` successfully.
 2. Build `Release|x64` successfully.
 3. Launch the real executable and verify:
-   - the main window title is `Hello World`;
-   - the child static control contains `Hello World!`.
+   - the main window title is `Calculator`;
+   - the read-only display starts at `0` above the calculator button grid;
+   - digits, decimals, clear, backspace, all four arithmetic operations, and equals work;
+   - division by zero displays `Error`, and entering a digit starts a new calculation.
 4. Move and resize the window, close it normally, and launch it again.
 5. Confirm that the second process restores the same window rectangle.
 6. Run:

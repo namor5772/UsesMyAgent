@@ -1,18 +1,484 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <cerrno>
+#include <cmath>
+#include <cstdlib>
+#include <iomanip>
+#include <sstream>
+#include <string>
+
 #pragma comment(lib, "Shell32.lib")
 
 namespace
 {
 constexpr wchar_t kWindowClassName[] = L"UsesMyAgentHelloWorldWindow";
-constexpr wchar_t kWindowTitle[] = L"Hello World";
-constexpr wchar_t kGreeting[] = L"Hello World!";
+constexpr wchar_t kWindowTitle[] = L"Calculator";
 constexpr wchar_t kSettingsRegistryPath[] = L"Software\\UsesMyAgent\\HelloWorld";
 constexpr wchar_t kWindowPlacementValueName[] = L"WindowPlacement";
 constexpr wchar_t kShortcutIconPath[] = L"%SystemRoot%\\System32\\main.cpl";
 constexpr int kShortcutIconIndex = 0;
-constexpr int kGreetingControlId = 1001;
+constexpr int kDisplayControlId = 1001;
+constexpr int kClearButtonId = 1100;
+constexpr int kBackspaceButtonId = 1101;
+constexpr int kDivideButtonId = 1102;
+constexpr int kMultiplyButtonId = 1103;
+constexpr int kSubtractButtonId = 1104;
+constexpr int kAddButtonId = 1105;
+constexpr int kEqualsButtonId = 1106;
+constexpr int kDecimalButtonId = 1107;
+constexpr int kDigitButtonIdBase = 1200;
+constexpr int kOuterMargin = 10;
+constexpr int kControlGap = 6;
+constexpr int kDisplayHeight = 50;
+constexpr int kColumnCount = 4;
+constexpr int kRowCount = 5;
+constexpr int kMinimumButtonWidth = 52;
+constexpr int kMinimumButtonHeight = 38;
+constexpr int kMinimumClientWidth = (2 * kOuterMargin)
+    + (kColumnCount * kMinimumButtonWidth)
+    + ((kColumnCount - 1) * kControlGap);
+constexpr int kMinimumClientHeight = (2 * kOuterMargin)
+    + kDisplayHeight
+    + kControlGap
+    + (kRowCount * kMinimumButtonHeight)
+    + ((kRowCount - 1) * kControlGap);
+constexpr size_t kMaximumInputLength = 18;
+
+struct ButtonDefinition
+{
+    int id;
+    const wchar_t* label;
+    int column;
+    int row;
+    int columnSpan;
+    int rowSpan;
+};
+
+constexpr ButtonDefinition kButtonDefinitions[] =
+{
+    { kClearButtonId, L"C", 0, 0, 1, 1 },
+    { kBackspaceButtonId, L"\u232B", 1, 0, 1, 1 },
+    { kDivideButtonId, L"\u00F7", 2, 0, 1, 1 },
+    { kMultiplyButtonId, L"\u00D7", 3, 0, 1, 1 },
+    { kDigitButtonIdBase + 7, L"7", 0, 1, 1, 1 },
+    { kDigitButtonIdBase + 8, L"8", 1, 1, 1, 1 },
+    { kDigitButtonIdBase + 9, L"9", 2, 1, 1, 1 },
+    { kSubtractButtonId, L"-", 3, 1, 1, 1 },
+    { kDigitButtonIdBase + 4, L"4", 0, 2, 1, 1 },
+    { kDigitButtonIdBase + 5, L"5", 1, 2, 1, 1 },
+    { kDigitButtonIdBase + 6, L"6", 2, 2, 1, 1 },
+    { kAddButtonId, L"+", 3, 2, 1, 1 },
+    { kDigitButtonIdBase + 1, L"1", 0, 3, 1, 1 },
+    { kDigitButtonIdBase + 2, L"2", 1, 3, 1, 1 },
+    { kDigitButtonIdBase + 3, L"3", 2, 3, 1, 1 },
+    { kEqualsButtonId, L"=", 3, 3, 1, 2 },
+    { kDigitButtonIdBase, L"0", 0, 4, 2, 1 },
+    { kDecimalButtonId, L".", 2, 4, 1, 1 },
+};
+
+struct CalculatorState
+{
+    HWND display = nullptr;
+    std::wstring displayText = L"0";
+    double accumulator = 0.0;
+    wchar_t pendingOperator = L'\0';
+    bool replaceDisplay = false;
+    bool hasError = false;
+};
+
+CalculatorState* GetCalculatorState(HWND window)
+{
+    return reinterpret_cast<CalculatorState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+}
+
+void UpdateDisplay(const CalculatorState& state)
+{
+    if (state.display != nullptr)
+    {
+        SetWindowTextW(state.display, state.displayText.c_str());
+    }
+}
+
+void ClearCalculator(CalculatorState& state)
+{
+    state.displayText = L"0";
+    state.accumulator = 0.0;
+    state.pendingOperator = L'\0';
+    state.replaceDisplay = false;
+    state.hasError = false;
+}
+
+void ShowCalculationError(CalculatorState& state)
+{
+    ClearCalculator(state);
+    state.displayText = L"Error";
+    state.replaceDisplay = true;
+    state.hasError = true;
+}
+
+bool TryParseDisplay(const CalculatorState& state, double& value)
+{
+    wchar_t* parseEnd = nullptr;
+    errno = 0;
+    const double parsedValue = std::wcstod(state.displayText.c_str(), &parseEnd);
+    if (parseEnd == state.displayText.c_str()
+        || parseEnd == nullptr
+        || *parseEnd != L'\0'
+        || errno == ERANGE
+        || !std::isfinite(parsedValue))
+    {
+        return false;
+    }
+
+    value = parsedValue;
+    return true;
+}
+
+std::wstring FormatNumber(double value)
+{
+    if (value == 0.0)
+    {
+        return L"0";
+    }
+
+    std::wostringstream stream;
+    stream << std::setprecision(15) << value;
+    return stream.str();
+}
+
+bool TryApplyOperation(double left, double right, wchar_t operation, double& result)
+{
+    switch (operation)
+    {
+    case L'+':
+        result = left + right;
+        break;
+
+    case L'-':
+        result = left - right;
+        break;
+
+    case L'*':
+        result = left * right;
+        break;
+
+    case L'/':
+        if (right == 0.0)
+        {
+            return false;
+        }
+        result = left / right;
+        break;
+
+    default:
+        return false;
+    }
+
+    return std::isfinite(result);
+}
+
+void EnterDigit(CalculatorState& state, wchar_t digit)
+{
+    if (state.hasError || state.replaceDisplay)
+    {
+        state.displayText.assign(1, digit);
+        state.replaceDisplay = false;
+        state.hasError = false;
+        return;
+    }
+
+    if (state.displayText == L"0")
+    {
+        if (digit != L'0')
+        {
+            state.displayText.assign(1, digit);
+        }
+        return;
+    }
+
+    if (state.displayText.length() < kMaximumInputLength)
+    {
+        state.displayText.push_back(digit);
+    }
+}
+
+void EnterDecimalPoint(CalculatorState& state)
+{
+    if (state.hasError || state.replaceDisplay)
+    {
+        state.displayText = L"0.";
+        state.replaceDisplay = false;
+        state.hasError = false;
+        return;
+    }
+
+    if (state.displayText.find(L'.') == std::wstring::npos
+        && state.displayText.length() < kMaximumInputLength)
+    {
+        state.displayText.push_back(L'.');
+    }
+}
+
+void Backspace(CalculatorState& state)
+{
+    if (state.hasError)
+    {
+        ClearCalculator(state);
+        return;
+    }
+
+    if (state.replaceDisplay)
+    {
+        return;
+    }
+
+    if (state.displayText.length() > 1)
+    {
+        state.displayText.pop_back();
+    }
+    else
+    {
+        state.displayText = L"0";
+    }
+}
+
+void SelectOperator(CalculatorState& state, wchar_t operation)
+{
+    if (state.hasError)
+    {
+        return;
+    }
+
+    if (state.pendingOperator != L'\0' && state.replaceDisplay)
+    {
+        state.pendingOperator = operation;
+        return;
+    }
+
+    double displayedValue = 0.0;
+    if (!TryParseDisplay(state, displayedValue))
+    {
+        ShowCalculationError(state);
+        return;
+    }
+
+    if (state.pendingOperator != L'\0')
+    {
+        double result = 0.0;
+        if (!TryApplyOperation(
+                state.accumulator,
+                displayedValue,
+                state.pendingOperator,
+                result))
+        {
+            ShowCalculationError(state);
+            return;
+        }
+
+        state.accumulator = result;
+        state.displayText = FormatNumber(result);
+    }
+    else
+    {
+        state.accumulator = displayedValue;
+    }
+
+    state.pendingOperator = operation;
+    state.replaceDisplay = true;
+}
+
+void CalculateResult(CalculatorState& state)
+{
+    if (state.hasError
+        || state.pendingOperator == L'\0'
+        || state.replaceDisplay)
+    {
+        return;
+    }
+
+    double displayedValue = 0.0;
+    double result = 0.0;
+    if (!TryParseDisplay(state, displayedValue)
+        || !TryApplyOperation(
+            state.accumulator,
+            displayedValue,
+            state.pendingOperator,
+            result))
+    {
+        ShowCalculationError(state);
+        return;
+    }
+
+    state.displayText = FormatNumber(result);
+    state.accumulator = result;
+    state.pendingOperator = L'\0';
+    state.replaceDisplay = true;
+}
+
+void LayoutCalculatorControls(HWND window, int clientWidth, int clientHeight)
+{
+    const HWND display = GetDlgItem(window, kDisplayControlId);
+    if (display != nullptr)
+    {
+        MoveWindow(
+            display,
+            kOuterMargin,
+            kOuterMargin,
+            clientWidth - (2 * kOuterMargin),
+            kDisplayHeight,
+            TRUE);
+    }
+
+    const int buttonAreaTop = kOuterMargin + kDisplayHeight + kControlGap;
+    const int buttonAreaWidth = clientWidth - (2 * kOuterMargin);
+    const int buttonAreaHeight = clientHeight - buttonAreaTop - kOuterMargin;
+    const int usableButtonWidth = buttonAreaWidth - ((kColumnCount - 1) * kControlGap);
+    const int usableButtonHeight = buttonAreaHeight - ((kRowCount - 1) * kControlGap);
+
+    for (const ButtonDefinition& definition : kButtonDefinitions)
+    {
+        const HWND button = GetDlgItem(window, definition.id);
+        if (button == nullptr)
+        {
+            continue;
+        }
+
+        const int left = kOuterMargin
+            + ((usableButtonWidth * definition.column) / kColumnCount)
+            + (definition.column * kControlGap);
+        const int right = kOuterMargin
+            + ((usableButtonWidth * (definition.column + definition.columnSpan))
+                / kColumnCount)
+            + ((definition.column + definition.columnSpan - 1) * kControlGap);
+        const int top = buttonAreaTop
+            + ((usableButtonHeight * definition.row) / kRowCount)
+            + (definition.row * kControlGap);
+        const int bottom = buttonAreaTop
+            + ((usableButtonHeight * (definition.row + definition.rowSpan)) / kRowCount)
+            + ((definition.row + definition.rowSpan - 1) * kControlGap);
+
+        MoveWindow(button, left, top, right - left, bottom - top, TRUE);
+    }
+}
+
+bool CreateCalculatorControls(HWND window)
+{
+    CalculatorState* const state = GetCalculatorState(window);
+    if (state == nullptr)
+    {
+        return false;
+    }
+
+    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    const HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+
+    const HWND display = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        L"STATIC",
+        L"0",
+        WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE | SS_NOPREFIX,
+        0,
+        0,
+        0,
+        0,
+        window,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDisplayControlId)),
+        instance,
+        nullptr);
+    if (display == nullptr)
+    {
+        return false;
+    }
+    state->display = display;
+    SendMessageW(display, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+
+    for (const ButtonDefinition& definition : kButtonDefinitions)
+    {
+        const HWND button = CreateWindowExW(
+            0,
+            L"BUTTON",
+            definition.label,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            0,
+            0,
+            0,
+            0,
+            window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(definition.id)),
+            instance,
+            nullptr);
+        if (button == nullptr)
+        {
+            return false;
+        }
+        SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+    }
+
+    RECT clientArea{};
+    GetClientRect(window, &clientArea);
+    LayoutCalculatorControls(
+        window,
+        clientArea.right - clientArea.left,
+        clientArea.bottom - clientArea.top);
+    return true;
+}
+
+void HandleCalculatorCommand(HWND window, int controlId)
+{
+    CalculatorState* const state = GetCalculatorState(window);
+    if (state == nullptr)
+    {
+        return;
+    }
+
+    if (controlId >= kDigitButtonIdBase && controlId <= kDigitButtonIdBase + 9)
+    {
+        EnterDigit(*state, static_cast<wchar_t>(L'0' + controlId - kDigitButtonIdBase));
+    }
+    else
+    {
+        switch (controlId)
+        {
+        case kClearButtonId:
+            ClearCalculator(*state);
+            break;
+
+        case kBackspaceButtonId:
+            Backspace(*state);
+            break;
+
+        case kDivideButtonId:
+            SelectOperator(*state, L'/');
+            break;
+
+        case kMultiplyButtonId:
+            SelectOperator(*state, L'*');
+            break;
+
+        case kSubtractButtonId:
+            SelectOperator(*state, L'-');
+            break;
+
+        case kAddButtonId:
+            SelectOperator(*state, L'+');
+            break;
+
+        case kEqualsButtonId:
+            CalculateResult(*state);
+            break;
+
+        case kDecimalButtonId:
+            EnterDecimalPoint(*state);
+            break;
+
+        default:
+            return;
+        }
+    }
+
+    UpdateDisplay(*state);
+}
 
 struct WindowIcons
 {
@@ -155,47 +621,54 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
 {
     switch (message)
     {
-    case WM_CREATE:
+    case WM_NCCREATE:
     {
-        const HWND greeting = CreateWindowExW(
-            0,
-            L"STATIC",
-            kGreeting,
-            WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
-            0,
-            0,
-            0,
-            0,
-            window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kGreetingControlId)),
-            GetModuleHandleW(nullptr),
-            nullptr);
-
-        if (greeting == nullptr)
+        const CREATESTRUCTW* const createInformation =
+            reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        if (createInformation == nullptr || createInformation->lpCreateParams == nullptr)
         {
-            return -1;
+            return FALSE;
         }
 
-        SendMessageW(
-            greeting,
-            WM_SETFONT,
-            reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)),
-            TRUE);
-        return 0;
+        SetWindowLongPtrW(
+            window,
+            GWLP_USERDATA,
+            reinterpret_cast<LONG_PTR>(createInformation->lpCreateParams));
+        return DefWindowProcW(window, message, wParam, lParam);
     }
 
-    case WM_SIZE:
-    {
-        const HWND greeting = GetDlgItem(window, kGreetingControlId);
-        if (greeting != nullptr)
+    case WM_CREATE:
+        return CreateCalculatorControls(window) ? 0 : -1;
+
+    case WM_COMMAND:
+        if (HIWORD(wParam) == BN_CLICKED)
         {
-            MoveWindow(
-                greeting,
-                0,
-                0,
-                LOWORD(lParam),
-                HIWORD(lParam),
-                TRUE);
+            HandleCalculatorCommand(window, LOWORD(wParam));
+        }
+        return 0;
+
+    case WM_SIZE:
+        LayoutCalculatorControls(window, LOWORD(lParam), HIWORD(lParam));
+        return 0;
+
+    case WM_GETMINMAXINFO:
+    {
+        MINMAXINFO* const sizeInformation = reinterpret_cast<MINMAXINFO*>(lParam);
+        if (sizeInformation != nullptr)
+        {
+            RECT minimumWindowBounds{ 0, 0, kMinimumClientWidth, kMinimumClientHeight };
+            if (AdjustWindowRectEx(
+                    &minimumWindowBounds,
+                    WS_OVERLAPPEDWINDOW,
+                    FALSE,
+                    0)
+                != FALSE)
+            {
+                sizeInformation->ptMinTrackSize.x =
+                    minimumWindowBounds.right - minimumWindowBounds.left;
+                sizeInformation->ptMinTrackSize.y =
+                    minimumWindowBounds.bottom - minimumWindowBounds.top;
+            }
         }
         return 0;
     }
@@ -204,6 +677,10 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         SaveWindowPlacement(window);
         DestroyWindow(window);
         return 0;
+
+    case WM_NCDESTROY:
+        SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+        return DefWindowProcW(window, message, wParam, lParam);
 
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -240,13 +717,14 @@ int WINAPI wWinMain(
         return 1;
     }
 
-    constexpr int defaultWindowWidth = 640;
-    constexpr int defaultWindowHeight = 360;
+    constexpr int defaultWindowWidth = 360;
+    constexpr int defaultWindowHeight = 500;
     const int defaultPositionX = (GetSystemMetrics(SM_CXSCREEN) - defaultWindowWidth) / 2;
     const int defaultPositionY = (GetSystemMetrics(SM_CYSCREEN) - defaultWindowHeight) / 2;
 
     WINDOWPLACEMENT savedPlacement{};
     const bool hasSavedPlacement = LoadWindowPlacement(savedPlacement);
+    CalculatorState calculatorState{};
 
     const HWND window = CreateWindowExW(
         0,
@@ -260,7 +738,7 @@ int WINAPI wWinMain(
         nullptr,
         nullptr,
         instance,
-        nullptr);
+        &calculatorState);
 
     if (window == nullptr)
     {
