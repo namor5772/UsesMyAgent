@@ -1,5 +1,7 @@
 #include <windows.h>
 #include <shellapi.h>
+#include <uxtheme.h>
+#include <vsstyle.h>
 
 #include <cerrno>
 #include <cmath>
@@ -9,6 +11,7 @@
 #include <string>
 
 #pragma comment(lib, "Shell32.lib")
+#pragma comment(lib, "UxTheme.lib")
 
 namespace
 {
@@ -28,6 +31,7 @@ constexpr int kAddButtonId = 1105;
 constexpr int kEqualsButtonId = 1106;
 constexpr int kDecimalButtonId = 1107;
 constexpr int kDigitButtonIdBase = 1200;
+constexpr wchar_t kBackspaceSymbol[] = L"\u232B";
 constexpr int kOuterMargin = 10;
 constexpr int kControlGap = 6;
 constexpr int kDisplayHeight = 50;
@@ -35,6 +39,13 @@ constexpr int kColumnCount = 4;
 constexpr int kRowCount = 5;
 constexpr int kMinimumButtonWidth = 52;
 constexpr int kMinimumButtonHeight = 38;
+constexpr int kControlFontHeightNumerator = 8;
+constexpr int kControlFontHeightDenominator = 10;
+constexpr int kButtonFontWidthNumerator = 9;
+constexpr int kButtonFontWidthDenominator = 10;
+constexpr int kDisplayTextHorizontalPadding = 12;
+constexpr int kMinimumDisplayFontHeight = 12;
+constexpr wchar_t kControlFontFace[] = L"Segoe UI";
 constexpr int kMinimumClientWidth = (2 * kOuterMargin)
     + (kColumnCount * kMinimumButtonWidth)
     + ((kColumnCount - 1) * kControlGap);
@@ -58,7 +69,7 @@ struct ButtonDefinition
 constexpr ButtonDefinition kButtonDefinitions[] =
 {
     { kClearButtonId, L"C", 0, 0, 1, 1 },
-    { kBackspaceButtonId, L"\u232B", 1, 0, 1, 1 },
+    { kBackspaceButtonId, kBackspaceSymbol, 1, 0, 1, 1 },
     { kDivideButtonId, L"\u00F7", 2, 0, 1, 1 },
     { kMultiplyButtonId, L"\u00D7", 3, 0, 1, 1 },
     { kDigitButtonIdBase + 7, L"7", 0, 1, 1, 1 },
@@ -80,6 +91,12 @@ constexpr ButtonDefinition kButtonDefinitions[] =
 struct CalculatorState
 {
     HWND display = nullptr;
+    HFONT buttonFont = nullptr;
+    HFONT equalsButtonFont = nullptr;
+    HFONT displayFont = nullptr;
+    int buttonFontHeight = 0;
+    int equalsButtonFontHeight = 0;
+    int displayFontHeight = 0;
     std::wstring displayText = L"0";
     double accumulator = 0.0;
     wchar_t pendingOperator = L'\0';
@@ -92,11 +109,14 @@ CalculatorState* GetCalculatorState(HWND window)
     return reinterpret_cast<CalculatorState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
 }
 
-void UpdateDisplay(const CalculatorState& state)
+void UpdateDisplayFont(CalculatorState& state);
+
+void UpdateDisplay(CalculatorState& state)
 {
     if (state.display != nullptr)
     {
         SetWindowTextW(state.display, state.displayText.c_str());
+        UpdateDisplayFont(state);
     }
 }
 
@@ -316,6 +336,353 @@ void CalculateResult(CalculatorState& state)
     state.replaceDisplay = true;
 }
 
+HFONT CreateBoldFont(int fontHeight, const wchar_t* fontFace)
+{
+    return CreateFontW(
+        -fontHeight,
+        0,
+        0,
+        0,
+        FW_BOLD,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE,
+        fontFace);
+}
+
+HFONT CreateBoldControlFont(int fontHeight)
+{
+    return CreateBoldFont(fontHeight, kControlFontFace);
+}
+
+int MeasureTextWidth(HFONT font, const wchar_t* text)
+{
+    const HDC screenDeviceContext = GetDC(nullptr);
+    if (screenDeviceContext == nullptr)
+    {
+        return 0;
+    }
+
+    const HGDIOBJ previousFont = SelectObject(screenDeviceContext, font);
+    SIZE textSize{};
+    const BOOL measured = GetTextExtentPoint32W(
+        screenDeviceContext,
+        text,
+        lstrlenW(text),
+        &textSize);
+
+    if (previousFont != nullptr && previousFont != HGDI_ERROR)
+    {
+        SelectObject(screenDeviceContext, previousFont);
+    }
+    ReleaseDC(nullptr, screenDeviceContext);
+    return measured != FALSE ? textSize.cx : 0;
+}
+
+int CalculateFittedFontHeight(
+    const wchar_t* text,
+    int targetHeight,
+    int maximumWidth,
+    int minimumHeight,
+    const wchar_t* fontFace)
+{
+    int fontHeight = targetHeight;
+    while (fontHeight > minimumHeight)
+    {
+        const HFONT measurementFont = CreateBoldFont(fontHeight, fontFace);
+        if (measurementFont == nullptr)
+        {
+            return 0;
+        }
+
+        const int textWidth = MeasureTextWidth(measurementFont, text);
+        DeleteObject(measurementFont);
+        if (textWidth <= 0 || textWidth <= maximumWidth)
+        {
+            break;
+        }
+
+        int fittedHeight = (fontHeight * maximumWidth) / textWidth;
+        if (fittedHeight >= fontHeight)
+        {
+            fittedHeight = fontHeight - 1;
+        }
+        fontHeight = fittedHeight < minimumHeight ? minimumHeight : fittedHeight;
+    }
+
+    return fontHeight;
+}
+
+void UpdateDisplayFont(CalculatorState& state)
+{
+    if (state.display == nullptr)
+    {
+        return;
+    }
+
+    RECT displayArea{};
+    RECT displayBounds{};
+    if (GetClientRect(state.display, &displayArea) == FALSE
+        || GetWindowRect(state.display, &displayBounds) == FALSE)
+    {
+        return;
+    }
+
+    const int displayWidth = displayArea.right - displayArea.left;
+    const int displayHeight = displayBounds.bottom - displayBounds.top;
+    const int targetHeight = (displayHeight * kControlFontHeightNumerator)
+        / kControlFontHeightDenominator;
+    const int maximumWidth = displayWidth - (2 * kDisplayTextHorizontalPadding);
+    const int fontHeight = CalculateFittedFontHeight(
+        state.displayText.c_str(),
+        targetHeight,
+        maximumWidth,
+        kMinimumDisplayFontHeight,
+        kControlFontFace);
+    if (fontHeight <= 0 || fontHeight == state.displayFontHeight)
+    {
+        return;
+    }
+
+    const HFONT newFont = CreateBoldControlFont(fontHeight);
+    if (newFont == nullptr)
+    {
+        return;
+    }
+
+    SendMessageW(
+        state.display,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(newFont),
+        TRUE);
+
+    if (state.displayFont != nullptr)
+    {
+        DeleteObject(state.displayFont);
+    }
+    state.displayFont = newFont;
+    state.displayFontHeight = fontHeight;
+}
+
+void DrawCenteredBackspaceButton(const DRAWITEMSTRUCT& drawInformation)
+{
+    RECT buttonArea = drawInformation.rcItem;
+    int buttonState = PBS_NORMAL;
+    if ((drawInformation.itemState & ODS_DISABLED) != 0)
+    {
+        buttonState = PBS_DISABLED;
+    }
+    else if ((drawInformation.itemState & ODS_SELECTED) != 0)
+    {
+        buttonState = PBS_PRESSED;
+    }
+    else if ((drawInformation.itemState & ODS_HOTLIGHT) != 0)
+    {
+        buttonState = PBS_HOT;
+    }
+    else if ((drawInformation.itemState & ODS_DEFAULT) != 0)
+    {
+        buttonState = PBS_DEFAULTED;
+    }
+
+    const HTHEME buttonTheme = OpenThemeData(drawInformation.hwndItem, L"BUTTON");
+    if (buttonTheme != nullptr)
+    {
+        DrawThemeBackground(
+            buttonTheme,
+            drawInformation.hDC,
+            BP_PUSHBUTTON,
+            buttonState,
+            &buttonArea,
+            nullptr);
+        CloseThemeData(buttonTheme);
+    }
+    else
+    {
+        UINT frameState = DFCS_BUTTONPUSH;
+        if ((drawInformation.itemState & ODS_SELECTED) != 0)
+        {
+            frameState |= DFCS_PUSHED;
+        }
+        if ((drawInformation.itemState & ODS_DISABLED) != 0)
+        {
+            frameState |= DFCS_INACTIVE;
+        }
+        DrawFrameControl(
+            drawInformation.hDC,
+            &buttonArea,
+            DFC_BUTTON,
+            frameState);
+    }
+
+    const int buttonWidth = buttonArea.right - buttonArea.left;
+    const int buttonHeight = buttonArea.bottom - buttonArea.top;
+    const int graphicWidth = (buttonWidth * 7) / 10;
+    const int graphicHeight = buttonHeight / 2;
+    const int graphicLeft = buttonArea.left + ((buttonWidth - graphicWidth) / 2);
+    const int graphicRight = buttonArea.right - ((buttonWidth - graphicWidth) / 2);
+    const int graphicTop = buttonArea.top + ((buttonHeight - graphicHeight) / 2);
+    const int graphicBottom = buttonArea.bottom - ((buttonHeight - graphicHeight) / 2);
+    const int graphicCenterY = (graphicTop + graphicBottom) / 2;
+    const int bodyLeft = graphicLeft + ((graphicRight - graphicLeft) / 4);
+    const int crossPaddingX = (graphicRight - bodyLeft) / 4;
+    const int crossPaddingY = (graphicBottom - graphicTop) / 4;
+    const int pressedOffset = (drawInformation.itemState & ODS_SELECTED) != 0 ? 1 : 0;
+
+    POINT outline[] =
+    {
+        { graphicLeft + pressedOffset, graphicCenterY + pressedOffset },
+        { bodyLeft + pressedOffset, graphicTop + pressedOffset },
+        { graphicRight + pressedOffset, graphicTop + pressedOffset },
+        { graphicRight + pressedOffset, graphicBottom + pressedOffset },
+        { bodyLeft + pressedOffset, graphicBottom + pressedOffset },
+        { graphicLeft + pressedOffset, graphicCenterY + pressedOffset },
+    };
+
+    const COLORREF graphicColor = GetSysColor(
+        (drawInformation.itemState & ODS_DISABLED) != 0
+        ? COLOR_GRAYTEXT
+        : COLOR_BTNTEXT);
+    const int penWidth = buttonHeight / 14 > 1 ? buttonHeight / 14 : 2;
+    const HPEN graphicPen = CreatePen(PS_SOLID, penWidth, graphicColor);
+    if (graphicPen != nullptr)
+    {
+        const HGDIOBJ previousPen = SelectObject(drawInformation.hDC, graphicPen);
+        Polyline(
+            drawInformation.hDC,
+            outline,
+            static_cast<int>(sizeof(outline) / sizeof(outline[0])));
+
+        MoveToEx(
+            drawInformation.hDC,
+            bodyLeft + crossPaddingX + pressedOffset,
+            graphicTop + crossPaddingY + pressedOffset,
+            nullptr);
+        LineTo(
+            drawInformation.hDC,
+            graphicRight - crossPaddingX + pressedOffset,
+            graphicBottom - crossPaddingY + pressedOffset);
+        MoveToEx(
+            drawInformation.hDC,
+            graphicRight - crossPaddingX + pressedOffset,
+            graphicTop + crossPaddingY + pressedOffset,
+            nullptr);
+        LineTo(
+            drawInformation.hDC,
+            bodyLeft + crossPaddingX + pressedOffset,
+            graphicBottom - crossPaddingY + pressedOffset);
+
+        if (previousPen != nullptr && previousPen != HGDI_ERROR)
+        {
+            SelectObject(drawInformation.hDC, previousPen);
+        }
+        DeleteObject(graphicPen);
+    }
+
+    if ((drawInformation.itemState & ODS_FOCUS) != 0
+        && (drawInformation.itemState & ODS_NOFOCUSRECT) == 0)
+    {
+        RECT focusArea = buttonArea;
+        InflateRect(&focusArea, -4, -4);
+        DrawFocusRect(drawInformation.hDC, &focusArea);
+    }
+}
+
+void UpdateButtonFonts(
+    HWND window,
+    CalculatorState& state,
+    int buttonWidth,
+    int buttonHeight,
+    int equalsButtonWidth,
+    int equalsButtonHeight)
+{
+    const int maximumButtonTextWidth = (buttonWidth * kButtonFontWidthNumerator)
+        / kButtonFontWidthDenominator;
+    const int targetButtonFontHeight = (buttonHeight * kControlFontHeightNumerator)
+        / kControlFontHeightDenominator;
+    const int buttonFontHeight = CalculateFittedFontHeight(
+        L"\u00D7",
+        targetButtonFontHeight,
+        maximumButtonTextWidth,
+        1,
+        kControlFontFace);
+    if (buttonFontHeight > 0 && buttonFontHeight != state.buttonFontHeight)
+    {
+        const HFONT newFont = CreateBoldControlFont(buttonFontHeight);
+        if (newFont != nullptr)
+        {
+            for (const ButtonDefinition& definition : kButtonDefinitions)
+            {
+                if (definition.id == kBackspaceButtonId
+                    || definition.id == kEqualsButtonId)
+                {
+                    continue;
+                }
+
+                const HWND button = GetDlgItem(window, definition.id);
+                if (button != nullptr)
+                {
+                    SendMessageW(
+                        button,
+                        WM_SETFONT,
+                        reinterpret_cast<WPARAM>(newFont),
+                        TRUE);
+                }
+            }
+
+            if (state.buttonFont != nullptr)
+            {
+                DeleteObject(state.buttonFont);
+            }
+            state.buttonFont = newFont;
+            state.buttonFontHeight = buttonFontHeight;
+        }
+    }
+
+    const int maximumEqualsTextWidth =
+        (equalsButtonWidth * kButtonFontWidthNumerator) / kButtonFontWidthDenominator;
+    const int targetEqualsFontHeight =
+        (equalsButtonHeight * kControlFontHeightNumerator) / kControlFontHeightDenominator;
+    const int equalsFontHeight = CalculateFittedFontHeight(
+        L"=",
+        targetEqualsFontHeight,
+        maximumEqualsTextWidth,
+        1,
+        kControlFontFace);
+    if (equalsFontHeight <= 0 || equalsFontHeight == state.equalsButtonFontHeight)
+    {
+        return;
+    }
+
+    const HFONT newEqualsFont = CreateBoldControlFont(equalsFontHeight);
+    if (newEqualsFont == nullptr)
+    {
+        return;
+    }
+
+    const HWND equalsButton = GetDlgItem(window, kEqualsButtonId);
+    if (equalsButton != nullptr)
+    {
+        SendMessageW(
+            equalsButton,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(newEqualsFont),
+            TRUE);
+    }
+
+    if (state.equalsButtonFont != nullptr)
+    {
+        DeleteObject(state.equalsButtonFont);
+    }
+    state.equalsButtonFont = newEqualsFont;
+    state.equalsButtonFontHeight = equalsFontHeight;
+}
+
 void LayoutCalculatorControls(HWND window, int clientWidth, int clientHeight)
 {
     const HWND display = GetDlgItem(window, kDisplayControlId);
@@ -360,6 +727,23 @@ void LayoutCalculatorControls(HWND window, int clientWidth, int clientHeight)
 
         MoveWindow(button, left, top, right - left, bottom - top, TRUE);
     }
+
+    CalculatorState* const state = GetCalculatorState(window);
+    if (state != nullptr)
+    {
+        const int buttonWidth = usableButtonWidth / kColumnCount;
+        const int buttonHeight = usableButtonHeight / kRowCount;
+        const int equalsButtonWidth = buttonWidth;
+        const int equalsButtonHeight = (2 * buttonHeight) + kControlGap;
+        UpdateDisplayFont(*state);
+        UpdateButtonFonts(
+            window,
+            *state,
+            buttonWidth,
+            buttonHeight,
+            equalsButtonWidth,
+            equalsButtonHeight);
+    }
 }
 
 bool CreateCalculatorControls(HWND window)
@@ -395,11 +779,15 @@ bool CreateCalculatorControls(HWND window)
 
     for (const ButtonDefinition& definition : kButtonDefinitions)
     {
+        const DWORD buttonStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP
+            | (definition.id == kBackspaceButtonId
+                ? BS_OWNERDRAW
+                : BS_PUSHBUTTON | BS_CENTER | BS_VCENTER);
         const HWND button = CreateWindowExW(
             0,
             L"BUTTON",
             definition.label,
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            buttonStyle,
             0,
             0,
             0,
@@ -647,6 +1035,18 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         }
         return 0;
 
+    case WM_DRAWITEM:
+    {
+        const DRAWITEMSTRUCT* const drawInformation =
+            reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+        if (wParam == kBackspaceButtonId && drawInformation != nullptr)
+        {
+            DrawCenteredBackspaceButton(*drawInformation);
+            return TRUE;
+        }
+        return FALSE;
+    }
+
     case WM_SIZE:
         LayoutCalculatorControls(window, LOWORD(lParam), HIWORD(lParam));
         return 0;
@@ -679,8 +1079,29 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return 0;
 
     case WM_NCDESTROY:
+    {
+        CalculatorState* const state = GetCalculatorState(window);
+        if (state != nullptr)
+        {
+            if (state->buttonFont != nullptr)
+            {
+                DeleteObject(state->buttonFont);
+                state->buttonFont = nullptr;
+            }
+            if (state->equalsButtonFont != nullptr)
+            {
+                DeleteObject(state->equalsButtonFont);
+                state->equalsButtonFont = nullptr;
+            }
+            if (state->displayFont != nullptr)
+            {
+                DeleteObject(state->displayFont);
+                state->displayFont = nullptr;
+            }
+        }
         SetWindowLongPtrW(window, GWLP_USERDATA, 0);
         return DefWindowProcW(window, message, wParam, lParam);
+    }
 
     case WM_DESTROY:
         PostQuitMessage(0);

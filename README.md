@@ -8,6 +8,9 @@ This repository also serves as a compact example of a local, AI-assisted coding 
 
 - Native Win32 GUI with no console window.
 - Read-only output display above a familiar, resizable calculator button grid.
+- Bold Segoe UI display and button text that automatically scales as the window is resized.
+- Display text that shrinks as needed to keep long values visible.
+- A centered, theme-aware owner-drawn backspace graphic.
 - Decimal input, clear, backspace, addition, subtraction, multiplication, division, and equals.
 - Immediate left-to-right chained calculations and clean recovery after division by zero.
 - The same Windows mouse icon as the local desktop shortcut in the title bar and window UI.
