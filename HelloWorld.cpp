@@ -22,6 +22,8 @@ constexpr wchar_t kWindowTitle[] = L"Calculator";
 constexpr wchar_t kSettingsRegistryPath[] = L"Software\\UsesMyAgent\\HelloWorld";
 constexpr wchar_t kWindowPlacementValueName[] = L"WindowPlacement";
 constexpr wchar_t kButtonColourValueName[] = L"ButtonColour";
+constexpr wchar_t kBackgroundColourValueName[] = L"BackgroundColour";
+constexpr wchar_t kOutputColourValueName[] = L"OutputColour";
 constexpr wchar_t kShortcutIconPath[] = L"%SystemRoot%\\System32\\main.cpl";
 constexpr int kShortcutIconIndex = 0;
 constexpr int kDisplayControlId = 1001;
@@ -37,6 +39,7 @@ constexpr int kDigitButtonIdBase = 1200;
 constexpr int kButtonColoursCommandId = 1300;
 constexpr int kBackgroundColoursCommandId = 1301;
 constexpr int kResetColoursCommandId = 1302;
+constexpr int kOutputColoursCommandId = 1303;
 constexpr wchar_t kBackspaceSymbol[] = L"\u232B";
 constexpr int kOuterMargin = 10;
 constexpr int kControlGap = 6;
@@ -106,6 +109,12 @@ struct CalculatorState
     bool hasButtonColour = false;
     COLORREF buttonColour = 0;
     HBRUSH buttonColourBrush = nullptr;
+    bool hasBackgroundColour = false;
+    COLORREF backgroundColour = 0;
+    HBRUSH backgroundColourBrush = nullptr;
+    bool hasOutputColour = false;
+    COLORREF outputColour = 0;
+    HBRUSH outputColourBrush = nullptr;
     COLORREF customColours[16]{};
     std::wstring displayText = L"0";
     double accumulator = 0.0;
@@ -980,6 +989,7 @@ HMENU CreateSettingsMenuBar()
 
     if (AppendMenuW(settingsMenu, MF_STRING, kButtonColoursCommandId, L"&Button Colours") == FALSE
         || AppendMenuW(settingsMenu, MF_STRING, kBackgroundColoursCommandId, L"Back&ground Colours") == FALSE
+        || AppendMenuW(settingsMenu, MF_STRING, kOutputColoursCommandId, L"&Output Colours") == FALSE
         || AppendMenuW(settingsMenu, MF_SEPARATOR, 0, nullptr) == FALSE
         || AppendMenuW(settingsMenu, MF_STRING, kResetColoursCommandId, L"&Reset Colours") == FALSE)
     {
@@ -1009,7 +1019,7 @@ HMENU CreateSettingsMenuBar()
     return menuBar;
 }
 
-bool LoadButtonColour(COLORREF& buttonColour)
+bool LoadStoredColour(const wchar_t* valueName, COLORREF& colour)
 {
     DWORD storedColour = 0;
     DWORD valueType = 0;
@@ -1017,7 +1027,7 @@ bool LoadButtonColour(COLORREF& buttonColour)
     const LSTATUS status = RegGetValueW(
         HKEY_CURRENT_USER,
         kSettingsRegistryPath,
-        kButtonColourValueName,
+        valueName,
         RRF_RT_REG_DWORD,
         &valueType,
         &storedColour,
@@ -1030,11 +1040,11 @@ bool LoadButtonColour(COLORREF& buttonColour)
         return false;
     }
 
-    buttonColour = static_cast<COLORREF>(storedColour);
+    colour = static_cast<COLORREF>(storedColour);
     return true;
 }
 
-void SaveButtonColour(COLORREF buttonColour)
+void SaveStoredColour(const wchar_t* valueName, COLORREF colour)
 {
     HKEY settingsKey = nullptr;
     if (RegCreateKeyExW(
@@ -1052,10 +1062,10 @@ void SaveButtonColour(COLORREF buttonColour)
         return;
     }
 
-    const DWORD storedColour = static_cast<DWORD>(buttonColour);
+    const DWORD storedColour = static_cast<DWORD>(colour);
     RegSetValueExW(
         settingsKey,
-        kButtonColourValueName,
+        valueName,
         0,
         REG_DWORD,
         reinterpret_cast<const BYTE*>(&storedColour),
@@ -1063,7 +1073,7 @@ void SaveButtonColour(COLORREF buttonColour)
     RegCloseKey(settingsKey);
 }
 
-void DeleteButtonColour()
+void DeleteStoredColour(const wchar_t* valueName)
 {
     HKEY settingsKey = nullptr;
     if (RegOpenKeyExW(
@@ -1077,7 +1087,7 @@ void DeleteButtonColour()
         return;
     }
 
-    RegDeleteValueW(settingsKey, kButtonColourValueName);
+    RegDeleteValueW(settingsKey, valueName);
     RegCloseKey(settingsKey);
 }
 
@@ -1107,7 +1117,7 @@ void ChooseButtonColour(HWND window, CalculatorState& state)
         state.buttonColourBrush = newBrush;
     }
 
-    SaveButtonColour(state.buttonColour);
+    SaveStoredColour(kButtonColourValueName, state.buttonColour);
 
     for (const ButtonDefinition& definition : kButtonDefinitions)
     {
@@ -1129,7 +1139,7 @@ void RevertButtonColour(HWND window, CalculatorState& state)
         state.buttonColourBrush = nullptr;
     }
 
-    DeleteButtonColour();
+    DeleteStoredColour(kButtonColourValueName);
 
     for (const ButtonDefinition& definition : kButtonDefinitions)
     {
@@ -1138,6 +1148,108 @@ void RevertButtonColour(HWND window, CalculatorState& state)
         {
             InvalidateRect(button, nullptr, TRUE);
         }
+    }
+}
+
+void ChooseBackgroundColour(HWND window, CalculatorState& state)
+{
+    CHOOSECOLORW options{};
+    options.lStructSize = sizeof(options);
+    options.hwndOwner = window;
+    options.rgbResult = state.hasBackgroundColour
+        ? state.backgroundColour
+        : GetSysColor(COLOR_WINDOW);
+    options.lpCustColors = state.customColours;
+    options.Flags = CC_RGBINIT | CC_FULLOPEN;
+    if (ChooseColorW(&options) == FALSE)
+    {
+        return;
+    }
+
+    state.backgroundColour = options.rgbResult;
+    state.hasBackgroundColour = true;
+
+    const HBRUSH newBrush = CreateSolidBrush(state.backgroundColour);
+    if (newBrush != nullptr)
+    {
+        if (state.backgroundColourBrush != nullptr)
+        {
+            DeleteObject(state.backgroundColourBrush);
+        }
+        state.backgroundColourBrush = newBrush;
+    }
+
+    SaveStoredColour(kBackgroundColourValueName, state.backgroundColour);
+
+    InvalidateRect(window, nullptr, TRUE);
+}
+
+void RevertBackgroundColour(HWND window, CalculatorState& state)
+{
+    state.hasBackgroundColour = false;
+    state.backgroundColour = 0;
+    if (state.backgroundColourBrush != nullptr)
+    {
+        DeleteObject(state.backgroundColourBrush);
+        state.backgroundColourBrush = nullptr;
+    }
+
+    DeleteStoredColour(kBackgroundColourValueName);
+
+    InvalidateRect(window, nullptr, TRUE);
+}
+
+void ChooseOutputColour(HWND window, CalculatorState& state)
+{
+    CHOOSECOLORW options{};
+    options.lStructSize = sizeof(options);
+    options.hwndOwner = window;
+    options.rgbResult = state.hasOutputColour
+        ? state.outputColour
+        : GetSysColor(COLOR_3DFACE);
+    options.lpCustColors = state.customColours;
+    options.Flags = CC_RGBINIT | CC_FULLOPEN;
+    if (ChooseColorW(&options) == FALSE)
+    {
+        return;
+    }
+
+    state.outputColour = options.rgbResult;
+    state.hasOutputColour = true;
+
+    const HBRUSH newBrush = CreateSolidBrush(state.outputColour);
+    if (newBrush != nullptr)
+    {
+        if (state.outputColourBrush != nullptr)
+        {
+            DeleteObject(state.outputColourBrush);
+        }
+        state.outputColourBrush = newBrush;
+    }
+
+    SaveStoredColour(kOutputColourValueName, state.outputColour);
+
+    if (state.display != nullptr)
+    {
+        InvalidateRect(state.display, nullptr, TRUE);
+    }
+}
+
+void RevertOutputColour(CalculatorState& state)
+{
+    state.hasOutputColour = false;
+    state.outputColour = 0;
+    if (state.outputColourBrush != nullptr)
+    {
+        DeleteObject(state.outputColourBrush);
+        state.outputColourBrush = nullptr;
+    }
+
+    DeleteStoredColour(kOutputColourValueName);
+
+    if (state.display != nullptr)
+    {
+        InvalidateRect(state.display, nullptr, TRUE);
     }
 }
 
@@ -1156,11 +1268,17 @@ void HandleSettingsCommand(HWND window, int commandId)
         break;
 
     case kBackgroundColoursCommandId:
-        // TODO: wire up the background colours command once its behavior is specified.
+        ChooseBackgroundColour(window, *state);
+        break;
+
+    case kOutputColoursCommandId:
+        ChooseOutputColour(window, *state);
         break;
 
     case kResetColoursCommandId:
         RevertButtonColour(window, *state);
+        RevertBackgroundColour(window, *state);
+        RevertOutputColour(*state);
         break;
 
     default:
@@ -1368,6 +1486,61 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return FALSE;
     }
 
+    case WM_ERASEBKGND:
+    {
+        CalculatorState* const state = GetCalculatorState(window);
+        if (state == nullptr || !state->hasBackgroundColour)
+        {
+            return DefWindowProcW(window, message, wParam, lParam);
+        }
+
+        RECT clientArea{};
+        if (GetClientRect(window, &clientArea) != FALSE)
+        {
+            HBRUSH fillBrush = state->backgroundColourBrush;
+            bool ownsFillBrush = false;
+            if (fillBrush == nullptr)
+            {
+                fillBrush = CreateSolidBrush(state->backgroundColour);
+                ownsFillBrush = true;
+            }
+            if (fillBrush != nullptr)
+            {
+                FillRect(reinterpret_cast<HDC>(wParam), &clientArea, fillBrush);
+                if (ownsFillBrush)
+                {
+                    DeleteObject(fillBrush);
+                }
+            }
+        }
+        return 1;
+    }
+
+    case WM_CTLCOLORSTATIC:
+    {
+        CalculatorState* const state = GetCalculatorState(window);
+        if (state == nullptr
+            || !state->hasOutputColour
+            || reinterpret_cast<HWND>(lParam) != state->display)
+        {
+            return DefWindowProcW(window, message, wParam, lParam);
+        }
+
+        if (state->outputColourBrush == nullptr)
+        {
+            state->outputColourBrush = CreateSolidBrush(state->outputColour);
+        }
+        if (state->outputColourBrush == nullptr)
+        {
+            return DefWindowProcW(window, message, wParam, lParam);
+        }
+
+        const HDC displayDeviceContext = reinterpret_cast<HDC>(wParam);
+        SetTextColor(displayDeviceContext, GetReadableTextColour(state->outputColour));
+        SetBkColor(displayDeviceContext, state->outputColour);
+        return reinterpret_cast<LRESULT>(state->outputColourBrush);
+    }
+
     case WM_SIZE:
         LayoutCalculatorControls(window, LOWORD(lParam), HIWORD(lParam));
         return 0;
@@ -1424,6 +1597,16 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 DeleteObject(state->buttonColourBrush);
                 state->buttonColourBrush = nullptr;
             }
+            if (state->backgroundColourBrush != nullptr)
+            {
+                DeleteObject(state->backgroundColourBrush);
+                state->backgroundColourBrush = nullptr;
+            }
+            if (state->outputColourBrush != nullptr)
+            {
+                DeleteObject(state->outputColourBrush);
+                state->outputColourBrush = nullptr;
+            }
         }
         SetWindowLongPtrW(window, GWLP_USERDATA, 0);
         return DefWindowProcW(window, message, wParam, lParam);
@@ -1478,11 +1661,27 @@ int WINAPI wWinMain(
     }
 
     COLORREF storedButtonColour = 0;
-    if (LoadButtonColour(storedButtonColour))
+    if (LoadStoredColour(kButtonColourValueName, storedButtonColour))
     {
         calculatorState.buttonColour = storedButtonColour;
         calculatorState.hasButtonColour = true;
         calculatorState.buttonColourBrush = CreateSolidBrush(storedButtonColour);
+    }
+
+    COLORREF storedBackgroundColour = 0;
+    if (LoadStoredColour(kBackgroundColourValueName, storedBackgroundColour))
+    {
+        calculatorState.backgroundColour = storedBackgroundColour;
+        calculatorState.hasBackgroundColour = true;
+        calculatorState.backgroundColourBrush = CreateSolidBrush(storedBackgroundColour);
+    }
+
+    COLORREF storedOutputColour = 0;
+    if (LoadStoredColour(kOutputColourValueName, storedOutputColour))
+    {
+        calculatorState.outputColour = storedOutputColour;
+        calculatorState.hasOutputColour = true;
+        calculatorState.outputColourBrush = CreateSolidBrush(storedOutputColour);
     }
 
     const HMENU menuBar = CreateSettingsMenuBar();
@@ -1497,7 +1696,7 @@ int WINAPI wWinMain(
         0,
         kWindowClassName,
         kWindowTitle,
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         defaultPositionX,
         defaultPositionY,
         defaultWindowWidth,

@@ -8,7 +8,7 @@ This repository also serves as a compact example of a local, AI-assisted coding 
 
 - Native Win32 GUI with no console window.
 - Read-only output display above a familiar, resizable calculator button grid.
-- A Settings menu in the window's menu bar with Button Colours and Background Colours commands (placeholders until their behaviour is wired up).
+- A Settings menu in the window's menu bar with Button Colours, Background Colours, and Output Colours commands that recolour the buttons, the client-area background around the controls, and the display background, plus a Reset Colours command that restores the defaults; chosen colours persist across restarts.
 - Bold Segoe UI display and button text that automatically scales as the window is resized.
 - Display text that shrinks as needed to keep long values visible.
 - A centered, theme-aware owner-drawn backspace graphic.
@@ -124,6 +124,8 @@ HKEY_CURRENT_USER\Software\UsesMyAgent\HelloWorld
 
 The value is named `WindowPlacement`. On the next launch, the application restores the saved normal window rectangle and whether the window was maximized. Minimized state is deliberately not restored, so the application never starts hidden on the taskbar.
 
+The same key stores any chosen colours as DWORD values named `ButtonColour`, `BackgroundColour`, and `OutputColour`; Reset Colours deletes them.
+
 Saved placement is ignored if it is malformed or does not intersect a currently available monitor. In that case, the application opens with its default `360 × 500` size, centered using the primary screen dimensions.
 
 To reset the saved placement from PowerShell:
@@ -140,7 +142,7 @@ There is no unit-test framework because the program is a very small native GUI a
 2. Build `Release|x64` successfully.
 3. Launch the real executable and verify:
    - the main window title is `Calculator`;
-   - the menu bar contains a `Settings` entry whose drop-down lists `Button Colours` and `Background Colours`;
+   - the menu bar contains a `Settings` entry whose drop-down lists `Button Colours`, `Background Colours`, `Output Colours`, and `Reset Colours`;
    - the read-only display starts at `0` above the calculator button grid;
    - digits, decimals, clear, backspace, all four arithmetic operations, and equals work;
    - division by zero displays `Error`, and entering a digit starts a new calculation.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository contains a minimal native C++ Win32 desktop calculator. It provides a read-only display above a resizable button grid for decimal input, clear, backspace, addition, subtraction, multiplication, division, and equals, and persists the window's position, size, and maximized state in `HKEY_CURRENT_USER\Software\UsesMyAgent\HelloWorld`.
+This repository contains a minimal native C++ Win32 desktop calculator. It provides a read-only display above a resizable button grid for decimal input, clear, backspace, addition, subtraction, multiplication, division, and equals. The Settings menu offers optional custom colours: Button Colours recolours the calculator buttons, Background Colours recolours the client-area background around the controls (not the display, menu bar, or title bar), Output Colours recolours the read-only display's background, and Reset Colours restores the defaults. The window's position, size, and maximized state and any chosen colours are persisted in `HKEY_CURRENT_USER\Software\UsesMyAgent\HelloWorld`.
 
 ## Environment and setup
 
@@ -43,14 +43,15 @@ After a meaningful source or project-file change:
 1. Build both `Debug|x64` and `Release|x64`.
 2. Launch the executable and verify that the main window title is `Calculator`.
 3. Verify that the read-only display starts at `0`, the calculator button grid is visible, and basic arithmetic works.
-4. Close the application after GUI verification.
-5. Run `git diff --check` before reporting completion.
+4. If colour handling changed, verify the Settings menu commands: Button Colours recolours the buttons, Background Colours recolours only the client-area background, Output Colours recolours only the display background, and Reset Colours restores the defaults.
+5. Close the application after GUI verification.
+6. Run `git diff --check` before reporting completion.
 
 There is no unit-test framework in this minimal project. A successful warning-clean build plus the GUI smoke test is the current verification procedure.
 
 ## Project structure
 
-- `HelloWorld.cpp` — Win32 entry point, calculator state and operations, controls, responsive layout, and window procedure.
+- `HelloWorld.cpp` — Win32 entry point, calculator state and operations, controls, responsive layout, settings menu with colour persistence, and window procedure.
 - `HelloWorld.vcxproj` — Debug and Release x64 build configuration.
 - `HelloWorld.sln` — Visual Studio solution.
 - `README.md` — user-facing build instructions.
