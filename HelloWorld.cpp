@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #include <uxtheme.h>
 #include <vsstyle.h>
@@ -10,6 +11,7 @@
 #include <sstream>
 #include <string>
 
+#pragma comment(lib, "Comdlg32.lib")
 #pragma comment(lib, "Shell32.lib")
 #pragma comment(lib, "UxTheme.lib")
 
@@ -19,6 +21,7 @@ constexpr wchar_t kWindowClassName[] = L"UsesMyAgentHelloWorldWindow";
 constexpr wchar_t kWindowTitle[] = L"Calculator";
 constexpr wchar_t kSettingsRegistryPath[] = L"Software\\UsesMyAgent\\HelloWorld";
 constexpr wchar_t kWindowPlacementValueName[] = L"WindowPlacement";
+constexpr wchar_t kButtonColourValueName[] = L"ButtonColour";
 constexpr wchar_t kShortcutIconPath[] = L"%SystemRoot%\\System32\\main.cpl";
 constexpr int kShortcutIconIndex = 0;
 constexpr int kDisplayControlId = 1001;
@@ -33,6 +36,7 @@ constexpr int kDecimalButtonId = 1107;
 constexpr int kDigitButtonIdBase = 1200;
 constexpr int kButtonColoursCommandId = 1300;
 constexpr int kBackgroundColoursCommandId = 1301;
+constexpr int kResetColoursCommandId = 1302;
 constexpr wchar_t kBackspaceSymbol[] = L"\u232B";
 constexpr int kOuterMargin = 10;
 constexpr int kControlGap = 6;
@@ -99,6 +103,10 @@ struct CalculatorState
     int buttonFontHeight = 0;
     int equalsButtonFontHeight = 0;
     int displayFontHeight = 0;
+    bool hasButtonColour = false;
+    COLORREF buttonColour = 0;
+    HBRUSH buttonColourBrush = nullptr;
+    COLORREF customColours[16]{};
     std::wstring displayText = L"0";
     double accumulator = 0.0;
     wchar_t pendingOperator = L'\0';
@@ -471,9 +479,55 @@ void UpdateDisplayFont(CalculatorState& state)
     state.displayFontHeight = fontHeight;
 }
 
-void DrawCenteredBackspaceButton(const DRAWITEMSTRUCT& drawInformation)
+COLORREF GetReadableTextColour(COLORREF backgroundColour)
+{
+    const int luminance = (299 * GetRValue(backgroundColour))
+        + (587 * GetGValue(backgroundColour))
+        + (114 * GetBValue(backgroundColour));
+    return luminance > 128000 ? RGB(0, 0, 0) : RGB(255, 255, 255);
+}
+
+void DrawButtonFocus(const DRAWITEMSTRUCT& drawInformation)
+{
+    if ((drawInformation.itemState & ODS_FOCUS) != 0
+        && (drawInformation.itemState & ODS_NOFOCUSRECT) == 0)
+    {
+        RECT focusArea = drawInformation.rcItem;
+        InflateRect(&focusArea, -4, -4);
+        DrawFocusRect(drawInformation.hDC, &focusArea);
+    }
+}
+
+void DrawButtonBackground(const DRAWITEMSTRUCT& drawInformation, const CalculatorState& state)
 {
     RECT buttonArea = drawInformation.rcItem;
+
+    if (state.hasButtonColour)
+    {
+        HBRUSH fillBrush = state.buttonColourBrush;
+        bool ownsFillBrush = false;
+        if (fillBrush == nullptr)
+        {
+            fillBrush = CreateSolidBrush(state.buttonColour);
+            ownsFillBrush = true;
+        }
+        if (fillBrush != nullptr)
+        {
+            FillRect(drawInformation.hDC, &buttonArea, fillBrush);
+            if (ownsFillBrush)
+            {
+                DeleteObject(fillBrush);
+            }
+        }
+
+        DrawEdge(
+            drawInformation.hDC,
+            &buttonArea,
+            (drawInformation.itemState & ODS_SELECTED) != 0 ? EDGE_SUNKEN : EDGE_RAISED,
+            BF_RECT);
+        return;
+    }
+
     int buttonState = PBS_NORMAL;
     if ((drawInformation.itemState & ODS_DISABLED) != 0)
     {
@@ -521,6 +575,12 @@ void DrawCenteredBackspaceButton(const DRAWITEMSTRUCT& drawInformation)
             DFC_BUTTON,
             frameState);
     }
+}
+
+void DrawCenteredBackspaceButton(const DRAWITEMSTRUCT& drawInformation, const CalculatorState& state)
+{
+    RECT buttonArea = drawInformation.rcItem;
+    DrawButtonBackground(drawInformation, state);
 
     const int buttonWidth = buttonArea.right - buttonArea.left;
     const int buttonHeight = buttonArea.bottom - buttonArea.top;
@@ -546,10 +606,10 @@ void DrawCenteredBackspaceButton(const DRAWITEMSTRUCT& drawInformation)
         { graphicLeft + pressedOffset, graphicCenterY + pressedOffset },
     };
 
-    const COLORREF graphicColor = GetSysColor(
-        (drawInformation.itemState & ODS_DISABLED) != 0
-        ? COLOR_GRAYTEXT
-        : COLOR_BTNTEXT);
+    const bool isDisabled = (drawInformation.itemState & ODS_DISABLED) != 0;
+    const COLORREF graphicColor = state.hasButtonColour && !isDisabled
+        ? GetReadableTextColour(state.buttonColour)
+        : GetSysColor(isDisabled ? COLOR_GRAYTEXT : COLOR_BTNTEXT);
     const int penWidth = buttonHeight / 14 > 1 ? buttonHeight / 14 : 2;
     const HPEN graphicPen = CreatePen(PS_SOLID, penWidth, graphicColor);
     if (graphicPen != nullptr)
@@ -586,13 +646,56 @@ void DrawCenteredBackspaceButton(const DRAWITEMSTRUCT& drawInformation)
         DeleteObject(graphicPen);
     }
 
-    if ((drawInformation.itemState & ODS_FOCUS) != 0
-        && (drawInformation.itemState & ODS_NOFOCUSRECT) == 0)
+    DrawButtonFocus(drawInformation);
+}
+
+void DrawTextButton(const DRAWITEMSTRUCT& drawInformation, const CalculatorState& state)
+{
+    RECT buttonArea = drawInformation.rcItem;
+    DrawButtonBackground(drawInformation, state);
+
+    wchar_t label[32]{};
+    GetWindowTextW(
+        drawInformation.hwndItem,
+        label,
+        static_cast<int>(sizeof(label) / sizeof(label[0])));
+
+    const HFONT buttonFont = reinterpret_cast<HFONT>(
+        SendMessageW(drawInformation.hwndItem, WM_GETFONT, 0, 0));
+    const HGDIOBJ previousFont = buttonFont != nullptr
+        ? SelectObject(drawInformation.hDC, buttonFont)
+        : nullptr;
+
+    const bool isDisabled = (drawInformation.itemState & ODS_DISABLED) != 0;
+    const COLORREF textColour = state.hasButtonColour && !isDisabled
+        ? GetReadableTextColour(state.buttonColour)
+        : GetSysColor(isDisabled ? COLOR_GRAYTEXT : COLOR_BTNTEXT);
+
+    SetBkMode(drawInformation.hDC, TRANSPARENT);
+    const COLORREF previousTextColour = SetTextColor(drawInformation.hDC, textColour);
+
+    RECT textArea = buttonArea;
+    if ((drawInformation.itemState & ODS_SELECTED) != 0)
     {
-        RECT focusArea = buttonArea;
-        InflateRect(&focusArea, -4, -4);
-        DrawFocusRect(drawInformation.hDC, &focusArea);
+        OffsetRect(&textArea, 1, 1);
     }
+    DrawTextW(
+        drawInformation.hDC,
+        label,
+        -1,
+        &textArea,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    if (previousTextColour != CLR_INVALID)
+    {
+        SetTextColor(drawInformation.hDC, previousTextColour);
+    }
+    if (previousFont != nullptr && previousFont != HGDI_ERROR)
+    {
+        SelectObject(drawInformation.hDC, previousFont);
+    }
+
+    DrawButtonFocus(drawInformation);
 }
 
 void UpdateButtonFonts(
@@ -781,10 +884,7 @@ bool CreateCalculatorControls(HWND window)
 
     for (const ButtonDefinition& definition : kButtonDefinitions)
     {
-        const DWORD buttonStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP
-            | (definition.id == kBackspaceButtonId
-                ? BS_OWNERDRAW
-                : BS_PUSHBUTTON | BS_CENTER | BS_VCENTER);
+        const DWORD buttonStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW;
         const HWND button = CreateWindowExW(
             0,
             L"BUTTON",
@@ -879,7 +979,9 @@ HMENU CreateSettingsMenuBar()
     }
 
     if (AppendMenuW(settingsMenu, MF_STRING, kButtonColoursCommandId, L"&Button Colours") == FALSE
-        || AppendMenuW(settingsMenu, MF_STRING, kBackgroundColoursCommandId, L"Back&ground Colours") == FALSE)
+        || AppendMenuW(settingsMenu, MF_STRING, kBackgroundColoursCommandId, L"Back&ground Colours") == FALSE
+        || AppendMenuW(settingsMenu, MF_SEPARATOR, 0, nullptr) == FALSE
+        || AppendMenuW(settingsMenu, MF_STRING, kResetColoursCommandId, L"&Reset Colours") == FALSE)
     {
         DestroyMenu(settingsMenu);
         return nullptr;
@@ -907,21 +1009,169 @@ HMENU CreateSettingsMenuBar()
     return menuBar;
 }
 
-void HandleSettingsCommand(int commandId)
+bool LoadButtonColour(COLORREF& buttonColour)
 {
+    DWORD storedColour = 0;
+    DWORD valueType = 0;
+    DWORD valueSize = static_cast<DWORD>(sizeof(storedColour));
+    const LSTATUS status = RegGetValueW(
+        HKEY_CURRENT_USER,
+        kSettingsRegistryPath,
+        kButtonColourValueName,
+        RRF_RT_REG_DWORD,
+        &valueType,
+        &storedColour,
+        &valueSize);
+
+    if (status != ERROR_SUCCESS
+        || valueType != REG_DWORD
+        || valueSize != sizeof(storedColour))
+    {
+        return false;
+    }
+
+    buttonColour = static_cast<COLORREF>(storedColour);
+    return true;
+}
+
+void SaveButtonColour(COLORREF buttonColour)
+{
+    HKEY settingsKey = nullptr;
+    if (RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            kSettingsRegistryPath,
+            0,
+            nullptr,
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            nullptr,
+            &settingsKey,
+            nullptr)
+        != ERROR_SUCCESS)
+    {
+        return;
+    }
+
+    const DWORD storedColour = static_cast<DWORD>(buttonColour);
+    RegSetValueExW(
+        settingsKey,
+        kButtonColourValueName,
+        0,
+        REG_DWORD,
+        reinterpret_cast<const BYTE*>(&storedColour),
+        static_cast<DWORD>(sizeof(storedColour)));
+    RegCloseKey(settingsKey);
+}
+
+void DeleteButtonColour()
+{
+    HKEY settingsKey = nullptr;
+    if (RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            kSettingsRegistryPath,
+            0,
+            KEY_SET_VALUE,
+            &settingsKey)
+        != ERROR_SUCCESS)
+    {
+        return;
+    }
+
+    RegDeleteValueW(settingsKey, kButtonColourValueName);
+    RegCloseKey(settingsKey);
+}
+
+void ChooseButtonColour(HWND window, CalculatorState& state)
+{
+    CHOOSECOLORW options{};
+    options.lStructSize = sizeof(options);
+    options.hwndOwner = window;
+    options.rgbResult = state.hasButtonColour ? state.buttonColour : GetSysColor(COLOR_BTNFACE);
+    options.lpCustColors = state.customColours;
+    options.Flags = CC_RGBINIT | CC_FULLOPEN;
+    if (ChooseColorW(&options) == FALSE)
+    {
+        return;
+    }
+
+    state.buttonColour = options.rgbResult;
+    state.hasButtonColour = true;
+
+    const HBRUSH newBrush = CreateSolidBrush(state.buttonColour);
+    if (newBrush != nullptr)
+    {
+        if (state.buttonColourBrush != nullptr)
+        {
+            DeleteObject(state.buttonColourBrush);
+        }
+        state.buttonColourBrush = newBrush;
+    }
+
+    SaveButtonColour(state.buttonColour);
+
+    for (const ButtonDefinition& definition : kButtonDefinitions)
+    {
+        const HWND button = GetDlgItem(window, definition.id);
+        if (button != nullptr)
+        {
+            InvalidateRect(button, nullptr, TRUE);
+        }
+    }
+}
+
+void RevertButtonColour(HWND window, CalculatorState& state)
+{
+    state.hasButtonColour = false;
+    state.buttonColour = 0;
+    if (state.buttonColourBrush != nullptr)
+    {
+        DeleteObject(state.buttonColourBrush);
+        state.buttonColourBrush = nullptr;
+    }
+
+    DeleteButtonColour();
+
+    for (const ButtonDefinition& definition : kButtonDefinitions)
+    {
+        const HWND button = GetDlgItem(window, definition.id);
+        if (button != nullptr)
+        {
+            InvalidateRect(button, nullptr, TRUE);
+        }
+    }
+}
+
+void HandleSettingsCommand(HWND window, int commandId)
+{
+    CalculatorState* const state = GetCalculatorState(window);
+    if (state == nullptr)
+    {
+        return;
+    }
+
     switch (commandId)
     {
     case kButtonColoursCommandId:
-        // TODO: wire up the button colours command once its behavior is specified.
+        ChooseButtonColour(window, *state);
         break;
 
     case kBackgroundColoursCommandId:
         // TODO: wire up the background colours command once its behavior is specified.
         break;
 
+    case kResetColoursCommandId:
+        RevertButtonColour(window, *state);
+        break;
+
     default:
         break;
     }
+}
+
+bool IsCalculatorButtonId(int controlId)
+{
+    return (controlId >= kClearButtonId && controlId <= kDecimalButtonId)
+        || (controlId >= kDigitButtonIdBase && controlId <= kDigitButtonIdBase + 9);
 }
 
 struct WindowIcons
@@ -1085,13 +1335,13 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         return CreateCalculatorControls(window) ? 0 : -1;
 
     case WM_COMMAND:
-        if (HIWORD(wParam) == BN_CLICKED)
+        if (lParam == 0 && HIWORD(wParam) == 0)
+        {
+            HandleSettingsCommand(window, LOWORD(wParam));
+        }
+        else if (lParam != 0 && HIWORD(wParam) == BN_CLICKED)
         {
             HandleCalculatorCommand(window, LOWORD(wParam));
-        }
-        else if (HIWORD(wParam) == 0)
-        {
-            HandleSettingsCommand(LOWORD(wParam));
         }
         return 0;
 
@@ -1099,9 +1349,20 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
     {
         const DRAWITEMSTRUCT* const drawInformation =
             reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
-        if (wParam == kBackspaceButtonId && drawInformation != nullptr)
+        CalculatorState* const state = GetCalculatorState(window);
+        if (drawInformation == nullptr || state == nullptr)
         {
-            DrawCenteredBackspaceButton(*drawInformation);
+            return FALSE;
+        }
+
+        if (wParam == kBackspaceButtonId)
+        {
+            DrawCenteredBackspaceButton(*drawInformation, *state);
+            return TRUE;
+        }
+        if (IsCalculatorButtonId(static_cast<int>(wParam)))
+        {
+            DrawTextButton(*drawInformation, *state);
             return TRUE;
         }
         return FALSE;
@@ -1158,6 +1419,11 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
                 DeleteObject(state->displayFont);
                 state->displayFont = nullptr;
             }
+            if (state->buttonColourBrush != nullptr)
+            {
+                DeleteObject(state->buttonColourBrush);
+                state->buttonColourBrush = nullptr;
+            }
         }
         SetWindowLongPtrW(window, GWLP_USERDATA, 0);
         return DefWindowProcW(window, message, wParam, lParam);
@@ -1206,6 +1472,18 @@ int WINAPI wWinMain(
     WINDOWPLACEMENT savedPlacement{};
     const bool hasSavedPlacement = LoadWindowPlacement(savedPlacement);
     CalculatorState calculatorState{};
+    for (COLORREF& customColour : calculatorState.customColours)
+    {
+        customColour = RGB(255, 255, 255);
+    }
+
+    COLORREF storedButtonColour = 0;
+    if (LoadButtonColour(storedButtonColour))
+    {
+        calculatorState.buttonColour = storedButtonColour;
+        calculatorState.hasButtonColour = true;
+        calculatorState.buttonColourBrush = CreateSolidBrush(storedButtonColour);
+    }
 
     const HMENU menuBar = CreateSettingsMenuBar();
     if (menuBar == nullptr)
