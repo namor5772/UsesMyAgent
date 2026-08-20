@@ -4,6 +4,8 @@
 
 This repository contains a minimal native C++ Win32 desktop calculator. It provides a read-only display above a resizable button grid for decimal input, clear, backspace, addition, subtraction, multiplication, division, and equals. The Settings menu offers optional custom colours: Button Colours recolours the calculator buttons, Background Colours recolours the client-area background around the controls (not the display, menu bar, or title bar), Output Colours recolours the read-only display's background, and Reset Colours restores the defaults. The window's position, size, and maximized state and any chosen colours are persisted in `HKEY_CURRENT_USER\Software\UsesMyAgent\HelloWorld`.
 
+Every function is also keyboard-accessible: Tab and Shift-Tab move focus between the buttons (C is the first stop and the decimal point button the last), arrow keys move within the button group, PgUp and PgDn move one grid row up or down, Enter presses the focused button, Tab past the last button or Shift-Tab before the first activates the menu bar, and Escape closes the application.
+
 ## Environment and setup
 
 - Host platform: Windows.
@@ -42,16 +44,17 @@ After a meaningful source or project-file change:
 
 1. Build both `Debug|x64` and `Release|x64`.
 2. Launch the executable and verify that the main window title is `Calculator`.
-3. Verify that the read-only display starts at `0`, the calculator button grid is visible, and basic arithmetic works.
-4. If colour handling changed, verify the Settings menu commands: Button Colours recolours the buttons, Background Colours recolours only the client-area background, Output Colours recolours only the display background, and Reset Colours restores the defaults.
-5. Close the application after GUI verification.
-6. Run `git diff --check` before reporting completion.
+3. Verify that the read-only display starts at `0`, the calculator button grid is visible, and basic arithmetic works, including a keyboard-only calculation (Tab/Shift-Tab to move focus, Enter to press buttons, PgUp/PgDn for vertical moves).
+4. Verify that Tab past the last button (or Shift-Tab before the first) activates the menu bar, that arrow keys and Enter navigate it, and that Escape outside menus closes the application.
+5. If colour handling changed, verify the Settings menu commands: Button Colours recolours the buttons, Background Colours recolours only the client-area background, Output Colours recolours only the display background, and Reset Colours restores the defaults.
+6. Close the application after GUI verification.
+7. Run `git diff --check` before reporting completion.
 
 There is no unit-test framework in this minimal project. A successful warning-clean build plus the GUI smoke test is the current verification procedure.
 
 ## Project structure
 
-- `HelloWorld.cpp` — Win32 entry point, calculator state and operations, controls, responsive layout, settings menu with colour persistence, and window procedure.
+- `HelloWorld.cpp` — Win32 entry point, calculator state and operations, controls, responsive layout, settings menu with colour persistence, keyboard navigation (dialog-style Tab/Enter handling via IsDialogMessage and a DM_GETDEFID handler, PgUp/PgDn grid moves, menu-bar tabbing, Escape to exit, focus restoration after dialogs), and window procedure.
 - `HelloWorld.vcxproj` — Debug and Release x64 build configuration.
 - `HelloWorld.sln` — Visual Studio solution.
 - `README.md` — user-facing build instructions.

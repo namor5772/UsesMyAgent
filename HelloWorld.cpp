@@ -100,6 +100,7 @@ constexpr ButtonDefinition kButtonDefinitions[] =
 struct CalculatorState
 {
     HWND display = nullptr;
+    int lastFocusedButtonId = kClearButtonId;
     HFONT buttonFont = nullptr;
     HFONT equalsButtonFont = nullptr;
     HFONT displayFont = nullptr;
@@ -893,7 +894,9 @@ bool CreateCalculatorControls(HWND window)
 
     for (const ButtonDefinition& definition : kButtonDefinitions)
     {
-        const DWORD buttonStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW;
+        // BS_NOTIFY lets the buttons report BN_SETFOCUS, which is used to
+        // remember the last focused button for keyboard focus restoration.
+        const DWORD buttonStyle = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY;
         const HWND button = CreateWindowExW(
             0,
             L"BUTTON",
@@ -1292,6 +1295,113 @@ bool IsCalculatorButtonId(int controlId)
         || (controlId >= kDigitButtonIdBase && controlId <= kDigitButtonIdBase + 9);
 }
 
+// Returns the control id of the window with keyboard focus, or 0 when focus
+// is not on a control.
+int GetFocusedControlId()
+{
+    const HWND focusWindow = GetFocus();
+    return focusWindow != nullptr ? GetDlgCtrlID(focusWindow) : 0;
+}
+
+void FocusControl(HWND window, int controlId)
+{
+    const HWND control = GetDlgItem(window, controlId);
+    if (control != nullptr)
+    {
+        SetFocus(control);
+    }
+}
+
+const ButtonDefinition* FindButtonDefinition(int controlId)
+{
+    for (const ButtonDefinition& definition : kButtonDefinitions)
+    {
+        if (definition.id == controlId)
+        {
+            return &definition;
+        }
+    }
+    return nullptr;
+}
+
+int FindButtonAtGridCell(int column, int row)
+{
+    for (const ButtonDefinition& definition : kButtonDefinitions)
+    {
+        if (column >= definition.column
+            && column < definition.column + definition.columnSpan
+            && row >= definition.row
+            && row < definition.row + definition.rowSpan)
+        {
+            return definition.id;
+        }
+    }
+    return 0;
+}
+
+bool TryMoveFocusVertically(HWND window, int rowDelta)
+{
+    const ButtonDefinition* const current = FindButtonDefinition(GetFocusedControlId());
+    if (current == nullptr)
+    {
+        return false;
+    }
+
+    const int targetRow = rowDelta > 0
+        ? current->row + current->rowSpan
+        : current->row - 1;
+    if (targetRow >= 0 && targetRow < kRowCount)
+    {
+        FocusControl(window, FindButtonAtGridCell(current->column, targetRow));
+    }
+    return true;
+}
+
+void ActivateMenuBarWithKeyboard(HWND window)
+{
+    // Deliver a synthetic F10 press so the default window procedure
+    // activates the menu bar the same way a real F10 keystroke does.
+    PostMessageW(window, WM_SYSKEYDOWN, VK_F10, 0x00440001);
+    PostMessageW(window, WM_SYSKEYUP, VK_F10, 0xC0440001);
+}
+
+bool TryHandleNavigationKey(HWND window, const MSG& message)
+{
+    if (message.message != WM_KEYDOWN)
+    {
+        return false;
+    }
+
+    if (message.wParam == VK_ESCAPE)
+    {
+        // Escape anywhere in the calculator closes the window, like Alt+F4.
+        PostMessageW(window, WM_CLOSE, 0, 0);
+        return true;
+    }
+
+    if (message.wParam == VK_PRIOR || message.wParam == VK_NEXT) // PgUp/PgDn
+    {
+        return TryMoveFocusVertically(window, message.wParam == VK_NEXT ? 1 : -1);
+    }
+
+    if (message.wParam == VK_TAB)
+    {
+        // The tab order follows kButtonDefinitions order: C is the first
+        // stop and '.' the last. At either edge, leave the controls and
+        // hand the keyboard to the menu bar instead of wrapping around.
+        const bool shiftPressed = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        const int focusControlId = GetFocusedControlId();
+        const int boundaryControlId = shiftPressed ? kClearButtonId : kDecimalButtonId;
+        if (focusControlId == boundaryControlId)
+        {
+            ActivateMenuBarWithKeyboard(window);
+            return true;
+        }
+    }
+
+    return false;
+}
+
 struct WindowIcons
 {
     HICON largeIcon = nullptr;
@@ -1461,7 +1571,41 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         {
             HandleCalculatorCommand(window, LOWORD(wParam));
         }
+        else if (lParam != 0 && HIWORD(wParam) == BN_SETFOCUS)
+        {
+            CalculatorState* const state = GetCalculatorState(window);
+            if (state != nullptr && IsCalculatorButtonId(LOWORD(wParam)))
+            {
+                state->lastFocusedButtonId = LOWORD(wParam);
+            }
+        }
         return 0;
+
+    case DM_GETDEFID:
+    {
+        // Owner-drawn buttons are not recognised as push buttons by the
+        // dialog manager, so report the focused calculator button as the
+        // default to let IsDialogMessage click it when Enter is pressed.
+        const int focusControlId = GetFocusedControlId();
+        if (IsCalculatorButtonId(focusControlId))
+        {
+            return MAKELRESULT(focusControlId, DC_HASDEFID);
+        }
+        return 0;
+    }
+
+    case WM_SETFOCUS:
+    {
+        // Keyboard operation lives on the buttons; when the menu bar or a
+        // modal dialog hands focus back to the frame, return it to the last
+        // focused button so Tab and Enter keep working.
+        CalculatorState* const state = GetCalculatorState(window);
+        if (state != nullptr)
+        {
+            FocusControl(window, state->lastFocusedButtonId);
+        }
+        return 0;
+    }
 
     case WM_DRAWITEM:
     {
@@ -1736,11 +1880,20 @@ int WINAPI wWinMain(
         hasSavedPlacement ? static_cast<int>(savedPlacement.showCmd) : showCommand);
     UpdateWindow(window);
 
+    FocusControl(window, kClearButtonId);
+
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0)
     {
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
+        if (TryHandleNavigationKey(window, message))
+        {
+            continue;
+        }
+        if (IsDialogMessageW(window, &message) == FALSE)
+        {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
     }
 
     UnregisterClassW(kWindowClassName, instance);

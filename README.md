@@ -14,6 +14,7 @@ This repository also serves as a compact example of a local, AI-assisted coding 
 - A centered, theme-aware owner-drawn backspace graphic.
 - Decimal input, clear, backspace, addition, subtraction, multiplication, division, and equals.
 - Immediate left-to-right chained calculations and clean recovery after division by zero.
+- Full keyboard operation: Tab and Shift-Tab move between buttons, arrow keys move within the grid, PgUp and PgDn move a row up or down, Enter or Space presses the focused button, Tab past the last button or Shift-Tab before the first activates the menu bar, and Escape closes the app.
 - The same Windows mouse icon as the local desktop shortcut in the title bar and window UI.
 - Unicode Windows API calls throughout.
 - Persistent window position, size, and maximized state.
@@ -114,6 +115,22 @@ After a Release build:
 
 A local desktop shortcut named **Hello World - Advanced Edition** may also be created to point to the Release executable. The shortcut itself is machine-specific and is not stored in this repository.
 
+## Keyboard use
+
+The calculator is fully usable without a mouse.
+
+| Key | Action |
+| --- | --- |
+| Tab / Shift-Tab | Move focus to the next / previous button |
+| Arrow keys | Move focus within the button grid |
+| PgUp / PgDn | Move focus one grid row up / down |
+| Enter or Space | Press the focused button |
+| Tab past the last button, or Shift-Tab before the first | Activate the menu bar (arrow keys and Enter navigate it, Escape leaves it) |
+| Escape | Close the app |
+| Alt+F4 | Close the app |
+
+Focus starts on the **C** button at launch and returns to the last used button after the Settings colour dialogs.
+
 ## Window placement persistence
 
 When the window receives a normal close request, the application stores a Win32 `WINDOWPLACEMENT` structure for the current Windows user at:
@@ -144,7 +161,7 @@ There is no unit-test framework because the program is a very small native GUI a
    - the main window title is `Calculator`;
    - the menu bar contains a `Settings` entry whose drop-down lists `Button Colours`, `Background Colours`, `Output Colours`, and `Reset Colours`;
    - the read-only display starts at `0` above the calculator button grid;
-   - digits, decimals, clear, backspace, all four arithmetic operations, and equals work;
+   - digits, decimals, clear, backspace, all four arithmetic operations, and equals work, both with the mouse and keyboard-only (Tab/Shift-Tab to move, Enter to press, PgUp/PgDn for vertical moves, the menu bar reachable from either end of the Tab cycle, and Escape closing the app);
    - division by zero displays `Error`, and entering a digit starts a new calculation.
 4. Move and resize the window, close it normally, and launch it again.
 5. Confirm that the second process restores the same window rectangle.
